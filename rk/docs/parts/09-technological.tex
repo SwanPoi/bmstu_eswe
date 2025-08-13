@@ -1,0 +1,150 @@
+\section{Технологический раздел}
+
+\subsection{Выбор языка и среды программирования}
+
+Для реализации был выбран язык C~\cite{c99}, так как в нем есть все средства для реализации загружаемого модуля ядра, выполняющего поставленную задачу.
+В качестве среды разработки был выбран Visual Studio Code~\cite{vscode}, так как он обладает всеми необходимыми средствами для реализации программы на языке C.
+
+\subsection{Реализация структур для хранения информации о планировании}
+
+
+В листинге~\ref{lst:struct} представлены структуры для хранения информации о планировании процесса.
+
+\begin{lstlisting}[label=lst:struct,caption=Структуры для хранения информации о планировании процесса]
+static int target_pid = 0;
+
+#define MAX_FUNC_NAME_LENGTH 1024
+#define MAX_SCHED_CLASS_LENGTH 3
+
+#define RT_SCHED_CLASS 0
+#define DL_SCHED_CLASS 1
+#define CFS_SCHED_CLASS 2
+#define IDLE_SCHED_CLASS 3
+
+struct rt_sched_data {
+	unsigned long			timeout;
+	unsigned int			time_slice;
+};
+
+struct dl_sched_data {
+	u64	dl_runtime;	
+	u64	dl_deadline;
+	u64	dl_period;
+	s64	runtime;
+	u64	deadline;	
+};
+
+struct process_sched_data {
+	/* priorities from struct task_struct */
+	int prio; 
+	int static_prio;
+	int normal_prio;
+	unsigned int rt_priority;
+	
+	unsigned int policy; 
+	/* weight from task->se.load.weight */
+	unsigned long weight;
+	/* task->se.vruntime */
+	u64 vruntime; 
+	
+	struct dl_sched_data *dl_data;
+	struct rt_sched_data *rt_data;
+	struct sched_info sched_info;
+	struct sched_statistics stats;
+	struct sched_entity se;
+	char func_name[MAX_FUNC_NAME_LENGTH];
+	int sched_class;
+	
+	struct process_sched_data *next;
+};
+
+struct sched_data_list {
+	struct process_sched_data *head;
+	struct process_sched_data *tail;
+};
+
+struct sched_data_list sched_data_list;
+
+\end{lstlisting}
+
+Структуры $rt\_sched\_data$ и $dl\_sched\_data$ предназначены для хранения параметров Real-Time и Deadline планировщиков.
+Структура \\ $process\_sched\_data$ содержит информацию о параметрах планирования. \\
+Структура $sched\_data\_list$ содержит указатели на первый и последний элементы списка.
+
+\subsection{Реализация создания элемента списка}
+
+В листинге~\ref{lst:add} представлена функция создания элемента списка с информацией о планировании.
+
+\begin{lstlisting}[label=lst:add,caption=Функция создания элемента списка с информацией о планировании]
+struct process_sched_data * create_process_sched_data(struct task_struct *p, char *func_name, int sched_class) 
+{
+	struct process_sched_data *data = (struct process_sched_data *) kmalloc(sizeof(struct process_sched_data), GFP_KERNEL);
+	
+	if (!data) 
+		return NULL;
+	
+	data->rt_data = NULL;
+	data->dl_data = NULL;
+	
+	data->rt_data = (struct rt_sched_data *) kmalloc(sizeof(struct rt_sched_data), GFP_KERNEL);
+	
+	if (!data->rt_data)
+	{
+		kfree(data);
+		return NULL;
+	}
+	data->rt_data->timeout = p->rt.timeout;
+	data->rt_data->time_slice = p->rt.time_slice;
+	
+	data->dl_data = (struct dl_sched_data *) kmalloc(sizeof(struct dl_sched_data), GFP_KERNEL);
+	
+	if (!data->dl_data)
+	{
+		kfree(data->rt_data);
+		kfree(data);
+		return NULL;
+	}
+	
+	data->dl_data->dl_runtime = p->dl.dl_runtime;
+	data->dl_data->dl_deadline = p->dl.dl_deadline;
+	data->dl_data->dl_period = p->dl.dl_period;
+	data->dl_data->runtime = p->dl.runtime;
+	data->dl_data->deadline = p->dl.deadline;
+	
+	data->next = NULL;
+	data->prio = p->prio;
+	data->static_prio = p->static_prio;
+	data->normal_prio = p->normal_prio;
+	data->rt_priority = p->rt_priority;
+	data->policy = p->policy;
+	data->sched_class = sched_class;
+	struct sched_statistics *stat = __my_schedstats_from_se(&p->se);
+	data->stats =  p->stats;
+	data->sched_info = p->sched_info;
+	data->se = p->se;
+	int read_len = snprintf(data->func_name, MAX_FUNC_NAME_LENGTH, "%s", &func_name[0]);
+	
+	return data;
+}
+\end{lstlisting}
+
+\subsection{Реализация обработчика функции task\_tick\_fair}
+
+В листинге~\ref{lst:hook} представлен обработчик функции $task\_tick\_fair$.
+
+\begin{lstlisting}[label=lst:hook,caption=Обработчик функции task\_tick\_fair]
+static int __kprobes kp_task_tick_fair_pre(struct kprobe *p, struct pt_regs *regs) 
+{
+	struct task_struct *task = NULL;
+	task = (struct task_struct *) p_regs_get_second_arg(regs);
+	if (task && task->pid == target_pid)
+	{
+		printk(KERN_INFO "before task_tick_fair() %d", task->pid);
+		add_sched_data(task, "task_tick_fair before", CFS_SCHED_CLASS);
+	}
+	return 0;
+}
+\end{lstlisting}
+Функция $p\_regs\_get\_second\_arg$ получает второй параметр, содержащий указатель на структуру $task\_struct$, из регистров.
+
+В приложении A приведен полный код программы.
